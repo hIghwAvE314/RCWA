@@ -50,6 +50,7 @@ class Layers(list):
         self.geom = geom
         self._init(params, src, geom)
 
+    @timer("Initialising the layers")
     def _init(self, params, src, geom):
         self.K = WaveVectorMatrix(src, geom, params)
         self.e_src = src.e_src
@@ -66,7 +67,9 @@ class Layers(list):
         trm = self.trm_layer
 
         self.gap_Smat = get_gapSmatrix(params.Nmodes)
+        print("Set up the reflection side S-matrix")
         self.ref_Smat = get_refSmatrix(ref.W, ref.V, gap.W, gap.V, acc=params.acc)
+        print("Set up the transmission side S-matrix")
         self.trm_Smat = get_trmSmatrix(trm.W, trm.V, gap.W, gap.V, acc=params.acc)
 
         self.nlayers = len(geom.hs)
@@ -74,13 +77,24 @@ class Layers(list):
         super().__init__(self.layers)
         self.dev_Smat = self.gap_Smat
     
+    @timer("Solving the problems")
     def solve(self):
+        n = 0
+        inhomo_indices = []
+        Smats = [self.ref_Smat]
         for layer in self.layers:
+            print(f"Solving for layer {n}...")
+            n += 1
             W, Lam, V = layer.init(self.params, self.K)
             Smat = get_Smatrix(W, Lam, V, self.gap_layer.W, self.gap_layer.V, self.src.k0, layer.h, is_homo=layer.is_homo, acc=self.params.acc)
-            self.dev_Smat = redheffer_product(self.dev_Smat, Smat, acc=self.params.acc)
-        Smat = redheffer_product(self.ref_Smat, self.dev_Smat, acc=self.params.acc)
-        self.Smat = redheffer_product(Smat, self.trm_Smat, acc=self.params.acc)
+            Smats.append(Smat)
+            inhomo_indices.append(n)
+            # self.dev_Smat = redheffer_product(self.dev_Smat, Smat, acc=self.params.acc)
+        Smats.append(self.trm_Smat)
+        # Smat = redheffer_product(self.ref_Smat, self.dev_Smat, acc=self.params.acc)
+        # self.Smat = redheffer_product(Smat, self.trm_Smat, acc=self.params.acc)
+        self.Smat = get_total_Smat(*Smats)
+        print("Solving for the fields and diffraction efficiency...")
         self.e_ref = self.ref_layer.W @ self.Smat.S11 @ dia_inverse(self.ref_layer.W) @ self.e_src
         self.e_trm = self.trm_layer.W @ self.Smat.S21 @ dia_inverse(self.ref_layer.W) @ self.e_src
         rx = self.e_ref.T[:self.params.Nmodes]
@@ -107,6 +121,7 @@ class Layers(list):
         return np.isclose(self.Rtot + self.Ttot, 1)
 
     def change_nmodes(self, Nmx, Nmy):
+        print(f"Changing total modes number to {Nmx},{Nmy}")
         self.params.Nmx = Nmx
         self.params.Nmy = Nmy
         self.params.init()
@@ -115,14 +130,14 @@ class Layers(list):
         self._init(self.params, self.src, self.geom)
         self.solve()
 
-    def converge_test(self, Max, step=2, comp='xy'):
+    def converge_test(self, Max, step=2, comp='xy', acc=1e-6):
         self.solve()
         R = [self.Rtot]
         T = [self.Ttot]
         Mx = self.params.Nmx
-        My = self.params.Nmx
-        Nx = (Max - Mx) / 2 + 1
-        Ny = (Max - My) / 2 + 1
+        My = self.params.Nmy
+        Nx = (Max - Mx) / step 
+        Ny = (Max - My) / step 
         N = max(Nx, 1) if 'x' in comp else 1
         N = max(N, Ny) if 'y' in comp else N
         is_converge=False
@@ -131,7 +146,7 @@ class Layers(list):
             My = My + step if 'y' in comp else My
             print(Mx, My)
             self.change_nmodes(Mx, My)
-            if np.isclose(self.Rtot, R[-1]) and np.isclose(self.Ttot, T[-1]):
+            if np.isclose(self.Rtot, R[-1], atol=acc) and np.isclose(self.Ttot, T[-1], atol=acc):
                 print(f"Convergence is reached at mode ({Mx},{My}), Reflectance {np.real(self.Rtot)}, Transmittance {np.real(self.Ttot)}")
                 is_converge = True
             else:

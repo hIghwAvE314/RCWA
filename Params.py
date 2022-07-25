@@ -1,5 +1,6 @@
 import numpy as np
 from scipy import linalg as LA
+from time import process_time
 
 
 class RCWAParams:
@@ -50,3 +51,16 @@ class Structure:
     period : a tuple reperesents periodicity of the structure (Lx, Ly)
     """
     pass
+
+
+def timer(msg):
+    def inner(func):
+        def wrapper(*args, **kwargs):
+            time1 = process_time()
+            res = func(*args, **kwargs)
+            time2 = process_time()
+            time = time2 - time1
+            print(f"Time usage of {msg}: {time} ms")
+            return res
+        return wrapper
+    return inner

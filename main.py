@@ -5,8 +5,8 @@ from layers import *
 """ Set up RCWA parameters """
 params = RCWAParams()
 params.dx, params.dy = 1e-3, 1e-3
-params.Nmx, params.Nmy = 41, 41
-params.acc=14
+params.Nmx, params.Nmy = 61, 21
+params.acc=0
 params.init()
 
 
@@ -77,23 +77,32 @@ geom.init(params)
 """Set up and run simulation"""
 sim = Layers(params, source, geom)
 sim.solve()
-# R, T = sim.converge_test(81, step=4, comp='xy')
+# R, T = sim.converge_test(161, step=8, comp='x', acc=1e-6)
 # plt.plot(R)
 # plt.plot(T)
 # plt.show()
 
-plt.imshow(np.real(sim.Ref))
-plt.show()
-plt.imshow(np.real(sim.Trm))
-plt.show()
-plt.scatter(sim.params.mx, np.real(sim.Ref[:, sim.params.My]))
-plt.scatter(sim.params.mx, np.real(sim.Trm[:, sim.params.My]))
+# kx = sim.K.Kx.diagonal().reshape(sim.params.Nmx, sim.params.Nmy)
+# ky = sim.K.Ky.diagonal().reshape(sim.params.Nmx, sim.params.Nmy)
+# real_mode_mask = np.isclose(np.imag(kx),0) + np.isclose(np.imag(ky),0)
+# plt.imshow(np.real(sim.Ref[real_mode_mask]))
+# plt.show()
+# plt.imshow(np.real(sim.Trm[real_mode_mask]))
+# plt.show()
+plt.stem(sim.params.mx, np.real(sim.Ref[:, sim.params.My]), markerfmt='x', label='ref')
+plt.stem(sim.params.mx, np.real(sim.Trm[:, sim.params.My]), markerfmt='x', label='trm')
+plt.legend()
 plt.show()
 
+print("\nReflectance:")
 for n, m in enumerate(sim.params.mx):
     r = np.real(sim.Ref[n, sim.params.My])
+    if not np.isclose(r, 0): print(f"mode {m}: {r}")
+print("\nTransmittance:")
+for n, m in enumerate(sim.params.mx):
     t = np.real(sim.Trm[n, sim.params.My])
     if not np.isclose(t, 0): print(f"Transmittance: {m}, {t}") 
-    if not np.isclose(r, 0): print(f"Reflectance: {m}, {r}")
 
+print("Total Reflectance: ",sim.Rtot)
+print("Total Transmittance: ",sim.Ttot)
 print(sim.Rtot + sim.Ttot)
