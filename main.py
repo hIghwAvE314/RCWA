@@ -5,7 +5,7 @@ from layers import *
 """ Set up RCWA parameters """
 params = RCWAParams()
 params.dx, params.dy = 1e-3, 1e-3
-params.Nmx, params.Nmy = 61, 21
+params.Nmx, params.Nmy = 21, 21
 params.acc=0
 params.init()
 
@@ -89,10 +89,11 @@ sim.solve()
 # plt.show()
 # plt.imshow(np.real(sim.Trm[real_mode_mask]))
 # plt.show()
-plt.stem(sim.params.mx, np.real(sim.Ref[:, sim.params.My]), markerfmt='x', label='ref')
-plt.stem(sim.params.mx, np.real(sim.Trm[:, sim.params.My]), markerfmt='x', label='trm')
-plt.legend()
-plt.show()
+
+# plt.stem(sim.params.mx, np.real(sim.Ref[:, sim.params.My]), markerfmt='x', label='ref')
+# plt.stem(sim.params.mx, np.real(sim.Trm[:, sim.params.My]), markerfmt='x', label='trm')
+# plt.legend()
+# plt.show()
 
 print("\nReflectance:")
 for n, m in enumerate(sim.params.mx):

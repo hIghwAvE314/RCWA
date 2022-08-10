@@ -1,190 +1,314 @@
-from typing import Union
+from numbers import Number
 import numpy as np
 import scipy as sp
-import abc
 from scipy import linalg as LA
 from scipy import sparse as spa
 from scipy.sparse import linalg as spLA
-import matplotlib.pyplot as plt
-from collections import namedtuple
+import torch
+from typing import Union
+from functools import wraps
 
 from Params import *
 
 
-MAT = Union[np.ndarray, spa.csc_matrix]
-# Smatrix = namedtuple('Smatrix', ['S11', 'S12', 'S21', 'S22'])
+MAT = Union[spa.spmatrix, torch.Tensor]
 
+def load_tensor(mat:torch.Tensor):
+    """Load tensor from cpu to cuda for GPU computation"""
+    return mat.cuda('cuda')
+
+def store_tensor(mat:torch.Tensor):
+    """Save tensor from cuda to cpu to free GPU memory"""
+    return mat.detach().cpu()
+
+def is_sparse(A:MAT) -> bool:
+    return isinstance(A, spa.spmatrix)
+
+def get_diag(A:MAT) -> Union[np.ndarray, None]:
+    """Only return the diagonal if the matrix is a sparse diagonal matrix"""
+    if hasattr(A, 'diag'):
+        return getattr(A, 'diag')
+    if is_sparse(A):
+        diag = A.diagonal()
+        if A.count_nonzero() == np.count_nonzero(diag):
+            setattr(A, 'diag', diag)
+            return diag
+    return None
+
+def totorch(A:MAT, device='cuda') -> torch.Tensor:
+    if is_sparse(A):
+        return torch.tensor(A.toarray(), device=device)
+    if device == 'cpu':
+        return A.cpu()
+    return A.cuda(device)
+
+def torch2numpy(A:torch.Tensor) -> np.ndarray:
+    return A.detach().cpu().numpy()
+
+def numpy2torch(A:np.ndarray, device='cuda') -> torch.Tensor:
+    res = torch.from_numpy(A)
+    if device == 'cpu':
+        return res
+    return res.cuda(device)
+
+def divide(num, arr:np.ndarray) -> np.ndarray:
+    return np.divide(num, arr, out=np.zeros_like(arr), where=arr!=0)
+
+"""These functions operates different matrix type"""
+def matmul(A:MAT, B:MAT) -> MAT:
+    if is_sparse(A) and is_sparse(B):
+        return A @ B
+    return totorch(A) @ totorch(B)
+
+def add(A:MAT, B:MAT) -> MAT:
+    if is_sparse(A) and is_sparse(B):
+        return A + B
+    return totorch(A) + totorch(B)
+
+def sub(A:MAT, B:MAT) -> MAT:
+    if is_sparse(A) and is_sparse(B):
+        return A - B
+    return totorch(A) - totorch(B)
+
+def mul(A:MAT, B:MAT) -> MAT:
+    if is_sparse(A) and is_sparse(B):
+        return A * B
+    return totorch(A) * totorch(B)
+
+def inv(A:MAT, is_store=False) -> MAT:
+    if hasattr(A, 'invmat'):
+        return getattr(A, 'invmat')
+    try:
+        if is_sparse(A):
+            diag = get_diag(A)
+            if diag is None:
+                mat = spLA.inv(A)
+            else:
+                diag_inv = divide(1., diag)
+                mat = spa.diags(diag_inv, format='csc', dtype=diag.dtype)
+                setattr(mat, 'diag', diag_inv)
+        else:
+            mat = torch.linalg.inv(A)
+    except RuntimeError as E:
+        print(E)
+        mat = pinv(A)
+    if is_store:
+        setattr(A, 'invmat', mat)
+    return mat
+
+def pinv(A:MAT) -> torch.Tensor:
+    """This method is quite slow, don't use unless neccessary"""
+    return torch.linalg.pinv(totorch(A))
+
+def expm(A:spa.spmatrix) -> spa.spmatrix:
+    """Only exponential of a diagonal sparse matrix is supported"""
+    diag = get_diag(A)
+    if diag is not None:
+        exp_diag = np.exp(diag)
+        mat = spa.diags(exp_diag, format='csc', dtype=diag.dtype)
+        setattr(mat, 'diag', exp_diag)
+        return mat
+    raise TypeError("Matrix exponential for a non diagonal sparse matrix is not supported!")
+
+def eig(A:torch.Tensor, pure_torch=False):
+    if is_sparse(A):
+        raise TypeError("Sparse matrix full eig is not supported!")
+    if pure_torch:
+        vals, vecs = torch.linalg.eig(A)
+    else:
+        Anp = torch2numpy(A)
+        npvals, npvecs = LA.eig(Anp)
+        # vals = numpy2torch(npvals)
+        vals = npvals
+        vecs = numpy2torch(npvecs)
+    return vals, vecs
+
+def div(A:MAT, B:MAT) -> MAT:
+    """ Calculate A_inverse @ B """
+    if is_sparse(A):
+        diag = get_diag(A)
+        if (diag is not None) or (not is_sparse(B)):
+            return matmul(inv(A), B)
+        A_lu = A.tocsc()
+        if is_sparse(B):
+            B_lu = B.tocsc()
+        return spLA.spsolve(A_lu, B_lu)
+    return torch.linalg.solve(A, totorch(B))
+
+def rdiv(A:MAT, B:MAT) -> MAT:
+    """Calculate B @ A_inverse by solve(A.T, B.T).T"""
+    return div(A.T, B.T).T
+
+@log()
+def block(blocks):
+    """Be careful of memory usage when using this function"""
+    [[A11, A12], [A21, A22]] = blocks
+    if all(is_sparse(A) for A in [A11, A12, A21, A22]):
+        return spa.bmat(blocks, format='csc')
+    row1 = torch.cat([totorch(A11,device='cpu'), totorch(A12,device='cpu')], 1)
+    row2 = torch.cat([totorch(A21,device='cpu'), totorch(A22,device='cpu')], 1)
+    bmat = torch.cat([row1, row2], 0)
+    return bmat
+
+
+class SMatrix:
+    @log()
+    def __init__(self, S11:MAT, S12:MAT, S21:MAT, S22:MAT):
+        self.is_sparse = all(is_sparse(S) for S in [S11, S12, S21, S22])
+        self.S11 = totorch(S11, device='cpu') if not self.is_sparse else S11
+        self.S12 = totorch(S12, device='cpu') if not self.is_sparse else S12
+        self.S21 = totorch(S21, device='cpu') if not self.is_sparse else S21
+        self.S22 = totorch(S22, device='cpu') if not self.is_sparse else S22
+        self.dtype = self.S11.dtype
+        self.size = self.S11.shape[0]
+
+    def _load(self):
+        if not self.is_sparse:
+            S11 = totorch(self.S11, device='cuda')
+            S12 = totorch(self.S12, device='cuda')
+            S21 = totorch(self.S21, device='cuda')
+            S22 = totorch(self.S22, device='cuda')
+            return S11, S12, S21, S22
+        return self.S11, self.S12, self.S21, self.S22
+    
+    @log("Computing S-Matrix star product")
+    def __mul__(self, other):
+        if self.is_sparse and other.is_sparse:
+            I = spa.identity(self.size, format='csc', dtype=self.dtype)
+        else:
+            if self.is_sparse:
+                I = numpy2torch(np.eye(self.size, dtype=self.dtype))
+            else:
+                I = torch.eye(self.size, device='cuda', dtype=self.dtype)
+        A11, A12, A21, A22 = self._load()
+        B11, B12, B21, B22 = other._load()
+        term1 = rdiv(I - matmul(B11, A22), A12)
+        term2 = rdiv(I - matmul(A22, B11), B21)
+        C11 = add(A11, matmul(matmul(term1, B11), A21))
+        C22 = add(B22, matmul(matmul(term2, A22), B12))
+        C12 = matmul(term1, B12)
+        C21 = matmul(term2, A21)
+        return SMatrix(C11, C12, C21, C22)
+        
 
 class WaveVectorMatrix:
     def __init__(self, source:Source, geom:Structure, params:RCWAParams):
         self.k_inc = np.sqrt(geom.errf*geom.urrf) * source.inc
+        self.dtype = params.dtype
+        self.Nmodes = params.Nmodes
+
         Tx = 2*np.pi / geom.period[0]
         Ty = 2*np.pi / geom.period[1]
         kx = self.k_inc[0] - params.modex * Tx / source.k0
         ky = self.k_inc[1] - params.modey * Ty / source.k0
 
-        self.Kx = spa.diags(kx, format='csc', dtype=complex)
-        self.Ky = spa.diags(ky, format='csc', dtype=complex)
-        self.Kz_0 = get_Kz(self.Kx, self.Ky)
-        self.Kz_rf = get_Kz(self.Kx, self.Ky, geom.errf, geom.urrf)
-        self.Kz_tm = get_Kz(self.Kx, self.Ky, geom.ertm, geom.urtm)
-
-
-class Smatrix:
-    def __init__(self, S11, S12, S21, S22):
-        self.S11 = S11
-        self.S12 = S12
-        self.S21 = S21
-        self.S22 = S22
-        self.Smat = block([[S11, S12], [S21, S22]])
+        self.Kx = spa.diags(kx, format='csc', dtype=self.dtype)
+        self.Ky = spa.diags(ky, format='csc', dtype=self.dtype)
+        setattr(self.Kx, 'diag', kx.astype(self.dtype))
+        setattr(self.Ky, 'diag', ky.astype(self.dtype))
+        self.Kz_0 = self.get_Kz()
+        self.Kz_rf = self.get_Kz(geom.errf, geom.urrf)
+        self.Kz_tm = self.get_Kz(geom.ertm, geom.urtm)
     
-    def __mul__(self, other):
-        return redheffer_product(self, other)
+    def get_eye(self, n=1):
+        return spa.identity(n*self.Nmodes, dtype=self.dtype, format='csc')
 
-    def det(self):
-        return LA.det(self.Smat)
+    def get_Kz(self, er=1.+0j, ur=1.+0j) -> spa.spmatrix:
+        """Kz is always a diagonal matrix"""
+        Kx, Ky, I = self.Kx, self.Ky, self.get_eye()
+        Kz = np.conj(np.sqrt(np.conj(er*ur)*I - Kx@Kx - Ky@Ky))
+        setattr(Kz, 'diag', Kz.diagonal())
+        return Kz
 
+    def _homo_Qmatrix(self, er=1.+0j, ur=1.+0j) -> spa.spmatrix:
+        """homoQmatrix is always a diagonal matrix"""
+        Kx, Ky, I = self.Kx, self.Ky, self.get_eye()
+        Q = [[Kx@Ky, ur*er*I - Kx@Kx], [Ky@Ky - ur*er*I, -Ky@Kx]]
+        return 1/ur * spa.bmat(Q, format='csc', dtype=self.dtype)
 
-def div(a, b):
-    return np.divide(a, b, out=np.zeros_like(b), where=b!=0)
+    def homo_decompose(self, er=1.+0j, ur=1.+0j):
+        """homo W Lam V are all diagonal matrices"""
+        W = self.get_eye(2)
+        Kz = self.get_Kz(er, ur)
+        Lam = spa.bmat([[1j*Kz, None], [None, 1j*Kz]], format='csc', dtype=self.dtype)
+        setattr(Lam, 'diag', Lam.diagonal())
+        Q = self._homo_Qmatrix(er, ur)
+        V = Q @ inv(Lam)
+        return W, Lam, V
 
-def block_diag_inv(A:spa.spmatrix):
-    M = int(A.shape[0]/2)
-    diag0 = A.diagonal(k=0)
-    diag1 = A.diagonal(k=M)
-    diag_1 = A.diagonal(k=-M)
-    a = diag0[:M]
-    b = diag1
-    c = diag_1
-    d = diag0[M:]
-    t1 = div(1,(a - div(b,d)*c))
-    t2 = div(1,(d - div(c,a)*b))
-    a11 = spa.diags(t1, format='csc', dtype=complex)
-    a12 = spa.diags(-t1*div(b,d), format='csc', dtype=complex)
-    a21 = spa.diags(-t2*div(c,a), format='csc', dtype=complex)
-    a22 = spa.diags(t2, format='csc', dtype=complex)
-    return spa.bmat([[a11, a12], [a21, a22]], format='csc', dtype=complex)
-
-
-def is_diag(A:MAT):
-    nz = A.count_nonzero() if isinstance(A, spa.spmatrix) else np.count_nonzero(A)
-    dnz = np.count_nonzero(A.diagonal())
-    return nz == dnz
-
-def is_sparse(A:MAT):
-    nnz = A.nnz if isinstance(A, spa.spmatrix) else np.count_nonzero(A)
-    sparsity = nnz/np.product(A.shape)
-    return sparsity <= 0.25
-
-def sparsity(A:MAT) -> float:
-    nnz = A.nnz if isinstance(A, spa.spmatrix) else np.count_nonzero(A)
-    sparsity = nnz/np.product(A.shape)
-    return sparsity
-
-def det(A:MAT) -> float:
-    if isinstance(A, spa.spmatrix):
-        lu = spLA.splu(A)
-        diagL = lu.L.diagonal()
-        diagU = lu.U.diagonal()
-        return diagL.prod() * diagU.prod()
-    return LA.det(A)
-
-
-def dia_inverse(A:MAT) -> spa.spmatrix:
-    diag = A.diagonal() if isinstance(A, spa.spmatrix) else np.diag(A)
-    diag_inv = np.divide(1, diag, out=np.zeros_like(diag, dtype=complex), where=diag!=0)
-    inv = spa.diags(diag_inv, format='csc', dtype=complex)
-    return inv
-
-def diag_expm(A:spa.spmatrix, acc=0):
-    """calculate the exponential matrix expm(kA) for a diagnol matrix A, k is the coefficient"""
-    diag = A.diagonal() if isinstance(A, spa.spmatrix) else np.diag(A)
-    res = spa.diags(np.exp(diag), format='csc', dtype=complex)
-    return reduce(res, acc=acc)
-
-def reduce(A:MAT, acc=0):
-    """Return sparse matrix depending on the sparsity, every value is round to the given decimal places"""
-    if acc:
-        if isinstance(A, spa.spmatrix): 
-            if is_sparse(A): 
-                res = np.round(A, acc)
-                res.eliminate_zeros()
-                return res
-            else:
-                A = A.toarray()
-        A_red = np.round(A, acc)
-        if is_sparse(A_red):
-            return spa.csc_matrix(A_red, dtype=complex)
-        return A_red
-    return A
-
-@timer("Calculating the matrix inversion")
-def pinv(A:MAT, is_homo=False, acc=0) -> MAT:
-    """return the inverse of A with same type of A"""
-    if is_homo or is_diag(A):
-        return dia_inverse(A)
-    if isinstance(A, spa.spmatrix):
-        if is_sparse(A):
-            try:
-                res = spLA.inv(A)
-            except RuntimeError:
-                A = A.toarray()
-                res = LA.pinv(A)
+    @log("Computing general Q matrix on {}".format(torch.cuda.get_device_name('cuda')))
+    def _general_Qmatrix(self, er:MAT, ur:MAT) -> spa.spmatrix:
+        """Usually general Q matrix is block-wise half sparse matrix, thus we treat Q as a dense matrix"""
+        Kx, Ky = self.Kx, self.Ky
+        if isinstance(ur, torch.Tensor):
+            Kx_cuda = totorch(Kx)
+            Ky_cuda = totorch(Ky)
+            er_cuda = totorch(er)
+            lu_ur = torch.linalg.lu_factor(ur)
+            urKx = torch.lu_solve(Kx_cuda, *lu_ur)
+            urKy = torch.lu_solve(Ky_cuda, *lu_ur)
+            Q = [[Kx_cuda@urKy, er_cuda - Kx_cuda@urKx], [Ky_cuda@urKy - er_cuda, -Ky_cuda@urKx]]
         else:
-            A = A.to_array()
-            res = LA.pinv(A)
-    else:
-        res = LA.pinv(A)
-    return reduce(res, acc=acc)
+            urKx = div(ur, Kx)
+            urKy = div(ur, Ky)
+            if isinstance(er, torch.Tensor):
+                Q = [[Kx@urKy, sub(er, Kx@urKx)], [sub(Ky@urKy, er), -Ky@urKx]]
+            else:
+                Q = [[Kx@urKy, er-Kx@urKx], [Ky@urKy-er, -Ky@urKx]]
+        return block(Q)
 
-@timer("Calculating LU solve")
-def divide(A:MAT, B:MAT, is_homo=False, acc=0) -> MAT:
-    """Calculate inv(A) @ B by solving linear system (LU solve or spsolve)"""
-    if is_homo or is_diag(A):
-        return dia_inverse(A) @ B
-    if isinstance(A, spa.spmatrix) and is_sparse(A):
-        try:
-            res = spLA.spsolve(A, B)
-        except RuntimeError:
-            res = pinv(A.toarray(), acc=acc) @ B
-    else:
-        if isinstance(A, spa.spmatrix): A = A.toarray()
-        try:
-            if isinstance(B, spa.spmatrix): B = B.toarray()
-            res = LA.lu_solve(LA.lu_factor(A), B)
-        except RuntimeError:
-            res = reduce(pinv(A, acc=acc) @ B, acc=acc)
-    return reduce(res, acc=acc)
+    @log("Computing general P matrix on {}".format(torch.cuda.get_device_name('cuda')))
+    def _general_Pmatrix(self, er:Union[Number, torch.Tensor], ur:Union[Number, torch.Tensor]) -> spa.spmatrix:
+        """Usually general P matrix is a dense matrix"""
+        Kx, Ky = self.Kx, self.Ky
+        if isinstance(er, torch.Tensor):
+            Kx_cuda = totorch(Kx)
+            Ky_cuda = totorch(Ky)
+            ur_cuda = totorch(ur)
+            lu_er = torch.linalg.lu_factor(er)
+            erKx = torch.lu_solve(Kx_cuda, *lu_er)
+            erKy = torch.lu_solve(Ky_cuda, *lu_er)
+            Q = [[Kx_cuda@erKy, ur_cuda - Kx_cuda@erKx], [Ky_cuda@erKy - ur_cuda, -Ky_cuda@erKx]]
+        else:
+            erKy = div(er, Kx)
+            erKx = div(er, Ky)
+            if isinstance(ur, torch.Tensor):
+                Q = [[Kx@erKy, sub(ur, Kx@erKx)], [sub(Ky@erKy, ur), -Ky@erKx]]
+            else:
+                Q = [[Kx@erKy, ur - Kx@erKx], [Ky@erKy - ur, -Ky@erKx]]
+        return block(Q)
 
-@timer("Calculating the redheffer star product")
-def redheffer_product(SA:Smatrix, SB:Smatrix, acc=0) -> Smatrix:
-    """Calculate the redheffer star product of matrix SA and SB, each component of Smatrix should be MAT type"""
-    I = spa.identity(SA.S11.shape[0], format='csc', dtype=complex)
-    mat1 = reduce(I - SB.S11@SA.S22, acc=acc)
-    mat2 = reduce(I - SA.S22@SB.S11, acc=acc)
-    term1 = reduce(SA.S12 @ pinv(mat1, acc=acc), acc=acc)
-    term2 = reduce(SB.S21 @ pinv(mat2, acc=acc), acc=acc)
-    
-    C11 = reduce(SA.S11 + term1 @ SB.S11@SA.S21, acc=acc)
-    C12 = reduce(term1 @ SB.S12, acc=acc)
-    C21 = reduce(term2 @ SA.S21, acc=acc)
-    C22 = reduce(SB.S22 + term2 @ SA.S22 @ SB.S12, acc=acc)
-    C = Smatrix(C11, C12, C21, C22)
-    return C
+    @log("Eigendecomposition")
+    def general_decompose(self, er:Union[Number, torch.Tensor], ur:Union[Number, torch.Tensor]) -> spa.spmatrix:
+        """W and V are dense matrix, Lam is sparse diagonal matrix"""
+        P = self._general_Pmatrix(er, ur)
+        Q = self._general_Qmatrix(er, ur)
+        """ This line below is very expensive """
+        lam2, W = eig(matmul(P, Q))  # P,Q here must be dense matrix as it is not possible to calculate full eigenvectors of a sparse matrix?
+        lam = np.sqrt(lam2)
+        Lam = spa.diags(lam, format='csc', dtype=self.dtype)
+        setattr(Lam, 'diag', lam)
+        Lam_inv = inv(Lam)
+        V = matmul(matmul(Q, W), Lam_inv)
+        return W, Lam, V
 
-@timer("Calculating FFT of the sturcture")
+
+
+@log(f"Computing fft on {torch.cuda.get_device_name('cuda')}")
 def fft2(arr:np.ndarray) -> np.ndarray:
     Nxy = np.product(arr.shape)  # total number of points in real space
-    Arr = np.fft.fft2(arr)/Nxy  # Fourier tranform of arr (normalised)
+    arr_torch = numpy2torch(arr)
+    Arr_torch = torch.fft.fft2(arr_torch)/Nxy  # Fourier tranform of arr (normalised)
+    Arr = torch2numpy(Arr_torch)
     return Arr
 
-@timer("Truncating the Fourier Series of the sturcture")
+@log("Truncating the Fourier Series of the sturcture", clean=False)
 def roll(arr:np.ndarray, Mx:int, My:int) -> np.ndarray:
     """arr: the array to be transformed; Mx, My: range of frequency space (-Mx..Mx) (-My..My)"""
     Arr = np.roll(arr, (Mx, My), axis=(0,1))[:2*Mx+1, :2*My+1]  # truncate the wanted frequencies
     return Arr
 
-@timer("Constructing the convolution matrix")
+@log("Constructing the convolution matrix", clean=False)
 def convol_matrix(mat:np.ndarray, Mx:int, My:int) -> np.ndarray:
     Nmodes = (Mx*2+1)*(My*2+1)
     k, l = np.meshgrid(range(Nmodes), range(Nmodes), indexing='ij')
@@ -197,141 +321,87 @@ def convol_matrix(mat:np.ndarray, Mx:int, My:int) -> np.ndarray:
     idy = np.where(cond, idy, 0)
     return np.where(cond, mat[idx, idy], 0) 
 
-def block(blocks):
-    for i, row in enumerate(blocks):
-        for j, item in enumerate(row):
-            if isinstance(item, spa.spmatrix):
-                blocks[i][j] = item.toarray()
-    return np.block(blocks)
+"""Functions involving Smatrix operation"""
+@log("Computing reflection side S-Matrix")
+def get_refSmatrix(Nmodes, V:spa.spmatrix, V0:spa.spmatrix) -> SMatrix:
+    Wterm = spa.identity(2*Nmodes, dtype=V.dtype, format='csc')  # W0_inv @ W, but both matrix are identity
+    Vterm = div(V0, V)  # sparse
+    A = Wterm + Vterm  # sparse
+    B = Wterm - Vterm  # sparse
+    A_inv = inv(A)  # sparse
+    S11 = -A_inv @ B  # sparse
+    S12 = 2 * A_inv  # sparse
+    S21 = 0.5 * ( A - B@A_inv@B )  # 0.5*(A-B@A_inv@B)  # sparse
+    S22 = B @ A_inv  # sparse
+    return SMatrix(S11, S12, S21, S22)
 
-def get_Kz(Kx:spa.csc_matrix, Ky:spa.csc_matrix, er=1.+0j, ur=1.+0j) -> spa.spmatrix:
-    """Kz is always a diagonal matrix"""
-    I = spa.identity(Kx.shape[0], dtype=complex, format='csc')
-    return np.conj(np.sqrt(np.conj(er*ur)*I - Kx@Kx - Ky@Ky))
+@log("Computing transmission side S-Matrix")
+def get_trmSmatrix(Nmodes, V:spa.spmatrix, V0:spa.spmatrix) -> SMatrix:
+    Wterm = spa.identity(2*Nmodes, dtype=V.dtype, format='csc')  # W0_inv @ W, but both matrix are identity
+    Vterm = div(V0, V)  # sparse
+    A = Wterm + Vterm  # sparse
+    B = Wterm - Vterm  # sparse
+    A_inv = inv(A)  # sparse
+    S22 = -A_inv @ B  # sparse
+    S21 = 2 * A_inv  # sparse
+    S12 = 0.5 * ( A - B@A_inv@B )  # 0.5*(A-B@A_inv@B)  # sparse
+    S11 = B @ A_inv  # sparse
+    return SMatrix(S11, S12, S21, S22)
 
-def homo_Qmatrix(Kx:spa.csc_matrix, Ky:spa.csc_matrix, er=1.+0j, ur=1.+0j) -> spa.spmatrix:
-    """homoQmatrix is always a diagonal matrix"""
-    I = spa.identity(Kx.shape[0], dtype=complex, format='csc')
-    Q = [[Kx@Ky, ur*er*I - Kx@Kx], [Ky@Ky - ur*er*I, -Ky@Kx]]
-    return 1/ur * spa.bmat(Q, format='csc', dtype=complex)
-
-@timer("Generating Q matrix for general layer")
-def general_Qmatrix(Kx:spa.csc_matrix, Ky:spa.csc_matrix, er:np.ndarray, ur:np.ndarray, acc=0) -> spa.spmatrix:
-    """Usually general Q matrix is block-wise half sparse matrix, thus we treat Q as a dense matrix"""
-    if isinstance(ur, np.ndarray):
-        lu_ur = LA.lu_factor(ur)
-        urKy = LA.lu_solve(lu_ur, Ky.toarray())
-        urKx = LA.lu_solve(lu_ur, Kx.toarray())
-    else:
-        urKy = divide(ur, Ky)
-        urKx = divide(ur, Kx)
-    Q = [[Kx@urKy, er - Kx@urKx], [Ky@urKy - er, -Ky@urKx]]
-    return reduce(block(Q), acc=acc)
-
-@timer("Generating P matrix for general layer")
-def general_Pmatrix(Kx:spa.csc_matrix, Ky:spa.csc_matrix, er:np.ndarray, ur:np.ndarray, acc=0) -> spa.spmatrix:
-    """Usually general P matrix is a dense matrix"""
-    if isinstance(er, np.ndarray):
-        lu_er = LA.lu_factor(er)
-        erKy = LA.lu_solve(lu_er, Ky.toarray())
-        erKx = LA.lu_solve(lu_er, Kx.toarray())
-    else:
-        erKy = divide(er, Ky)
-        erKx = divide(er, Kx)
-    P = [[Kx@erKy, ur - Kx@erKx], [Ky@erKy - ur, -Ky@erKx]]
-    return reduce(block(P), acc=acc)
-
-def homo_decompose(Kx:spa.csc_matrix, Ky:spa.csc_matrix, er=1.+0j, ur=1.+0j):
-    """homo W Lam V are all diagonal matrices"""
-    W = spa.identity(2*Kx.shape[0], dtype=complex, format='csc')
-    Kz = get_Kz(Kx, Ky, er, ur)
-    Lam = spa.bmat([[1j*Kz, None], [None, 1j*Kz]], format='csc')
-    Q = homo_Qmatrix(Kx, Ky, er, ur)
-    V = Q @ dia_inverse(Lam)
-    return W, Lam, V
-
-@timer("Eigenvalues decomposition")
-def general_decompose(Kx:spa.csc_matrix, Ky:spa.csc_matrix, er:np.ndarray, ur:np.ndarray, acc=0):
-    """W and V are dense matrix, Lam is sparse diagonal matrix"""
-    P = general_Pmatrix(Kx, Ky, er, ur)
-    Q = general_Qmatrix(Kx, Ky, er, ur)
-    """ This line below is very expensive """
-    omg2 = reduce(P@Q, acc=acc)
-    if isinstance(omg2, spa.spmatrix): omg2 = omg2.toarray()
-    lam2, W = LA.eig(omg2)  # P,Q here must be dense matrix as it is not possible to calculate full eigenvectors of a sparse matrix?
-    lam = np.sqrt(lam2)
-    Lam = spa.diags(lam, format='csc', dtype=complex)
-    Lam_inv = dia_inverse(Lam)
-    V = Q @ W @ Lam_inv
-    return W, Lam, V
-
-@timer("Generating the S-matrix of the layer")
-def get_Smatrix(W:MAT, Lam:spa.csc_matrix, V:MAT, W0:spa.spmatrix, V0:MAT, k0, thick=0., is_homo=False, acc=0):
+@log("Computing homogeneous layer S-Matrix")
+def get_homo_Smatrix(Nmodes, Lam:spa.csc_matrix, V:spa.spmatrix, V0:spa.spmatrix, k0, thick=0.) -> SMatrix:
     """if is_homo: all components of S is diagonal sparse matrix, else: all component is dense matrix"""
-    Wterm = divide(W, W0, is_homo=is_homo)
-    Vterm = divide(V, V0)
-    A = reduce(Wterm + Vterm, acc=acc)  # MAT
-    B = reduce(Wterm - Vterm, acc=acc)  # MAT
-    X = diag_expm( -k0*thick * Lam)  # sparse
-    BA_inv = reduce(B @ pinv(A), acc=acc)  # MAT
-    D = pinv(A - X @ BA_inv @ X @ B, acc=acc)  # MAT
-    S11 = reduce(D @ ( X@BA_inv@X@A - B))  # MAT
-    S12 = reduce(D @ X @ ( A - BA_inv@B ))  # MAT
+    Wterm = spa.identity(2*Nmodes, dtype=Lam.dtype, format='csc')  # W0_inv @ W, but both matrix are identity
+    Vterm = div(V, V0)  # sparse
+    A = Wterm + Vterm  # sparse
+    B = Wterm - Vterm  # sparse
+    X = expm( -k0*thick * Lam)  # sparse
+    BA_inv = rdiv(A, B)  # sparse
+    D_inv = spLA.inv(A - X @ BA_inv @ X @ B)  # sparse
+    S11 = D_inv @ (X@BA_inv@X@A - B)  # sparse
+    S12 = D_inv @ (X@(A - BA_inv@B))  # sparse
+    S21 = S12  # sparse
+    S22 = S11  # sparse
+    return SMatrix(S11, S12, S21, S22)
+
+@log(f"Computing general layer S-Matrix on {torch.cuda.get_device_name('cuda')}")
+def get_Smatrix(W:MAT, Lam:spa.csc_matrix, V:MAT, W0:spa.spmatrix, V0:spa.spmatrix, k0, thick=0.) -> SMatrix:
+    """if is_homo: all components of S is diagonal sparse matrix, else: all component is dense matrix"""
+    Wterm = div(W, W0)
+    Vterm = div(V, V0)
+    A = add(Wterm, Vterm)  # MAT
+    B = sub(Wterm, Vterm)  # MAT
+    X = totorch(expm( -k0*thick * Lam))  # sparse
+    BA_inv = rdiv(A, B)  # MAT
+    D_lu = torch.linalg.lu_factor(A - X@BA_inv@X@B)
+    S11 = torch.lu_solve((X@BA_inv@X@A - B), *D_lu)  # MAT
+    S12 = torch.lu_solve(X@(A - BA_inv@B), *D_lu)  # MAT
     S21 = S12  # MAT
     S22 = S11  # MAT
-    return Smatrix(S11, S12, S21, S22)
+    return SMatrix(S11, S12, S21, S22)
 
-def get_gapSmatrix(Nmodes:int) -> Smatrix:
-    I = spa.identity(2*Nmodes, dtype=complex, format='csc')
-    O = spa.csc_matrix((2*Nmodes, 2*Nmodes), dtype=complex)
-    return Smatrix(O, I, I, O)
-
-@timer("Generating the S-matrix of reflection side")
-def get_refSmatrix(W:spa.spmatrix, V:MAT, W0:spa.spmatrix, V0:MAT, acc=0) -> Smatrix:
-    Wterm = reduce(pinv(W0) @ W, acc=acc)  # sparse
-    Vterm = reduce(pinv(V0) @ V, acc=acc)  # sparse
-    A = reduce(Wterm + Vterm, acc=acc)  # sparse
-    B = reduce(Wterm - Vterm, acc=acc)  # sparse
-    A_inv = reduce(pinv(A))  # sparse
-    S11 = reduce(-A_inv @ B)  # sparse
-    S12 = reduce(2 * A_inv)  # sparse
-    S21 = reduce(0.5 * ( A - B@A_inv@B ))  # 0.5*(A-B@A_inv@B)  # sparse
-    S22 = reduce(B @ A_inv)  # sparse
-    return Smatrix(S11, S12, S21, S22)
-
-@timer("Generating the S-matrix of transmission side")
-def get_trmSmatrix(W:spa.spmatrix, V:MAT, W0:spa.spmatrix, V0:MAT, acc=0) -> Smatrix:
-    Wterm = reduce(pinv(W0) @ W, acc=acc)  # sparse
-    Vterm = reduce(pinv(V0) @ V, acc=acc)  # sparse
-    A = reduce(Wterm + Vterm, acc=acc)  # sparse
-    B = reduce(Wterm - Vterm, acc=acc)  # sparse
-    A_inv = reduce(pinv(A))  # sparse
-    S22 = reduce(-A_inv @ B)  # sparse
-    S21 = reduce(2 * A_inv)  # sparse
-    S12 = reduce(0.5 * ( A - B@A_inv@B ))  # sparse
-    S11 = reduce(B @ A_inv)  # sparse
-    return Smatrix(S11, S12, S21, S22)
-
-@timer("Calculating the total S-matrix")
-def get_total_Smat(*Smats, inhomo=[]):
+@log("Computing global S-Matrix")
+def get_total_Smat(*Smats):
     new_Smats = []
     last = None
-    print("Summerizing the sparse S-matrices")
+    print("Compressing S-matrices")
     for n, Smat in enumerate(Smats):
-        if n in inhomo:
-            if last is not None:
-                new_Smats.append(last)
+        if last is None:
+            last = Smat
+            if not Smat.is_sparse:
+                new_Smats.append(Smat)
                 last = None
-            new_Smats.append(Smat)
         else:
-            last = last * Smat if last is not None else Smat
+            if Smat.is_sparse:
+                last = last * Smat
+            else:
+                new_Smats.append(last)
+                new_Smats.append(Smat)
+                last = None
     if last is not None:
         new_Smats.append(last)
     tot = None
-    print("Summerizing all S-matrices")
+    print("Computing total S-matrix")
     for Smat in new_Smats:
         tot = tot * Smat if tot is not None else Smat
     return tot
-
-
-    

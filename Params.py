@@ -1,12 +1,14 @@
 import numpy as np
 from scipy import linalg as LA
 from time import process_time
+import torch
 
 
 class RCWAParams:
     dx, dy = 1e-3, 1e-3  # resolution in real space (um)
     Nmx, Nmy = 7, 7  # number of harmonics in each direction
-    acc = 16
+    # acc = 16
+    dtype = complex
 
     is_init = False
 
@@ -53,14 +55,15 @@ class Structure:
     pass
 
 
-def timer(msg):
+def log(msg='', clean=True):
     def inner(func):
         def wrapper(*args, **kwargs):
             time1 = process_time()
             res = func(*args, **kwargs)
             time2 = process_time()
             time = time2 - time1
-            print(f"Time usage of {msg}: {time} ms")
+            if msg : print(f"Time usage of {msg}: {time*1000} ms")
+            if clean: torch.cuda.empty_cache()
             return res
         return wrapper
     return inner
