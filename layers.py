@@ -123,7 +123,7 @@ class Layers(list):
         self.Rtot = np.sum(self.Ref)
         self.Ttot = np.sum(self.Trm)
 
-    def get_force(self):
+    def get_force(self, file=''):
         sinx_rf = np.real(self.K.Kx.diag/self.ref_layer.nr).reshape(self.params.Nmx, self.params.Nmy)/self.src.k0
         siny_rf = np.real(self.K.Ky.diag/self.ref_layer.nr).reshape(self.params.Nmx, self.params.Nmy)/self.src.k0
         sinx_tm = np.real(self.K.Kx.diag/self.trm_layer.nr).reshape(self.params.Nmx, self.params.Nmy)/self.src.k0
@@ -131,6 +131,15 @@ class Layers(list):
         Fx = np.sum(self.Ref*sinx_rf + self.Trm*sinx_tm)
         Fy = np.sum(self.Ref*siny_rf + self.Trm*siny_tm)
         Fz = 2 * self.Rtot
+        if file:
+            np.savez(
+                file,
+                Kx = np.real(self.K.Kx.diag).reshape(self.params.Nmx, self.params.Nmy),
+                Ky = np.real(self.K.Ky.diag).reshape(self.params.Nmx, self.params.Nmy),
+                Ref = self.Ref,
+                Trm = self.Trm,
+                F = np.array([Fx, Fy, Fz]),
+            )
         return np.array([Fx, Fy, Fz])
 
     def _power_conserve(self):
