@@ -5,7 +5,7 @@ from layers import *
 """ Set up RCWA parameters """
 params = RCWAParams()
 params.dx, params.dy = 1e-3, 1e-3
-params.Nmx, params.Nmy = 61, 21
+params.Nmx, params.Nmy = 21, 21
 params.acc=0
 params.init()
 
