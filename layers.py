@@ -22,23 +22,29 @@ class Layer:
         self.er_fft = None
         self.ur_fft = None
 
-    def init(self, params:RCWAParams, K:WaveVectorMatrix):
+    @log("Initialising Layer")
+    def init(self, params:RCWAParams, wvm:WaveVectorMatrix):
         if self.is_homo:
-            self.W, self.Lam, self.V = homo_decompose(K.Kx, K.Ky, self.er, self.ur)
+            self.W, self.Lam, self.V = wvm.homo_decompose(self.er, self.ur)
+            W, V = self.W, self.V
         else:
-            self.er_fft, er = self._init_convol_mat(self.er, params, Comp=self.er_fft)
-            self.ur_fft, ur = self._init_convol_mat(self.ur, params, Comp=self.ur_fft)
-            self.W, self.Lam, self.V = general_decompose(K.Kx, K.Ky, er, ur, acc=params.acc)
-        return self.W, self.Lam, self.V
+            self.er_fft, er = self._init_convol_mat(self.er, params, buffer=self.er_fft)
+            self.ur_fft, ur = self._init_convol_mat(self.ur, params, buffer=self.ur_fft)
+            er = numpy2torch(er) if isinstance(er, np.ndarray) else er
+            ur = numpy2torch(ur) if isinstance(ur, np.ndarray) else ur
+            W, self.Lam, V = wvm.general_decompose(er, ur)
+            self.W = totorch(W, device='cpu')
+            self.V = totorch(V, device='cpu')
+        return W, self.Lam, V
 
-    def _init_convol_mat(self, comp, params, Comp=None):
-        if isinstance(comp, np.ndarray):
-            if Comp is None: Comp = fft2(comp)
-            comp_mn = roll(Comp, params.Mx, params.My)
+    def _init_convol_mat(self, component, params, buffer=None):
+        if isinstance(component, np.ndarray):
+            if buffer is None: buffer = fft2(component)
+            comp_mn = roll(buffer, params.Mx, params.My)
             conv = convol_matrix(comp_mn, params.Mx, params.My)
         else:
-            conv = comp * spa.identity(params.Nmodes, dtype=complex, format='csc')
-        return Comp, conv
+            conv = component * spa.identity(params.Nmodes, dtype=params.dtype, format='csc')
+        return buffer, conv
 
 
 
@@ -50,7 +56,7 @@ class Layers(list):
         self.geom = geom
         self._init(params, src, geom)
 
-    @timer("Initialising the layers")
+    @log("Initialising the layers")
     def _init(self, params, src, geom):
         self.K = WaveVectorMatrix(src, geom, params)
         self.e_src = src.e_src
@@ -59,50 +65,52 @@ class Layers(list):
         self.trm_layer = Layer(geom.ertm, geom.urtm)
         self.gap_layer = Layer(1+0j, 1+0j)
 
-        self.ref_layer.init(params, self.K)
-        self.trm_layer.init(params, self.K)
-        self.gap_layer.init(params, self.K)
-        ref = self.ref_layer
-        gap = self.gap_layer
-        trm = self.trm_layer
+        Vrf = self.ref_layer.init(params, self.K)[-1]
+        Vtm = self.trm_layer.init(params, self.K)[-1]
+        V0 = self.gap_layer.init(params, self.K)[-1]
 
-        self.gap_Smat = get_gapSmatrix(params.Nmodes)
-        print("Set up the reflection side S-matrix")
-        self.ref_Smat = get_refSmatrix(ref.W, ref.V, gap.W, gap.V, acc=params.acc)
-        print("Set up the transmission side S-matrix")
-        self.trm_Smat = get_trmSmatrix(trm.W, trm.V, gap.W, gap.V, acc=params.acc)
+        self.ref_Smat = get_refSmatrix(params.Nmodes, Vrf, V0)
+        self.trm_Smat = get_trmSmatrix(params.Nmodes, Vtm, V0)
 
         self.nlayers = len(geom.hs)
         self.layers = [Layer(geom.er[i], geom.ur[i], geom.hs[i]) for i in range(self.nlayers)]
         super().__init__(self.layers)
-        self.dev_Smat = self.gap_Smat
+        self.dev_Smat = None
     
-    @timer("Solving the problems")
+    @log("Solving the problems")
     def solve(self):
         n = 0
-        inhomo_indices = []
         Smats = [self.ref_Smat]
+        W0 = self.gap_layer.W
+        V0 = self.gap_layer.V
+        k0 = self.src.k0
+        Nmodes = self.params.Nmodes
         for layer in self.layers:
             print(f"Solving for layer {n}...")
             n += 1
             W, Lam, V = layer.init(self.params, self.K)
-            Smat = get_Smatrix(W, Lam, V, self.gap_layer.W, self.gap_layer.V, self.src.k0, layer.h, is_homo=layer.is_homo, acc=self.params.acc)
+            if layer.is_homo:
+                Smat = get_homo_Smatrix(Nmodes, Lam, V, V0, k0, layer.h)
+            else:
+                Smat = get_Smatrix(W, Lam, V, W0, V0, k0, layer.h)
             Smats.append(Smat)
-            inhomo_indices.append(n)
-            # self.dev_Smat = redheffer_product(self.dev_Smat, Smat, acc=self.params.acc)
         Smats.append(self.trm_Smat)
-        # Smat = redheffer_product(self.ref_Smat, self.dev_Smat, acc=self.params.acc)
-        # self.Smat = redheffer_product(Smat, self.trm_Smat, acc=self.params.acc)
         self.Smat = get_total_Smat(*Smats)
         print("Solving for the fields and diffraction efficiency...")
-        self.e_ref = self.ref_layer.W @ self.Smat.S11 @ dia_inverse(self.ref_layer.W) @ self.e_src
-        self.e_trm = self.trm_layer.W @ self.Smat.S21 @ dia_inverse(self.ref_layer.W) @ self.e_src
+        self.get_DE()
+        self.is_conserve = self._power_conserve()
+
+    def get_DE(self):
+        # self.e_ref = self.ref_layer.W @ self.Smat.S11 @ inv(self.ref_layer.W) @ self.e_src
+        # self.e_trm = self.trm_layer.W @ self.Smat.S21 @ inv(self.ref_layer.W) @ self.e_src
+        self.e_ref = torch2numpy(self.Smat.S11) @ self.e_src
+        self.e_trm = torch2numpy(self.Smat.S21) @ self.e_src
         rx = self.e_ref.T[:self.params.Nmodes]
         ry = self.e_ref.T[self.params.Nmodes:]
-        rz = - dia_inverse(self.K.Kz_rf) @ (self.K.Kx@rx + self.K.Ky@ry)
+        rz = - inv(self.K.Kz_rf) @ (self.K.Kx@rx + self.K.Ky@ry)
         tx = self.e_trm.T[:self.params.Nmodes]
         ty = self.e_trm.T[self.params.Nmodes:]
-        tz = - dia_inverse(self.K.Kz_tm) @ (self.K.Kx@tx + self.K.Ky@ty)
+        tz = - inv(self.K.Kz_tm) @ (self.K.Kx@tx + self.K.Ky@ty)
         self.rcoeff = np.array([rx, ry, rz])
         self.tcoeff = np.array([tx, ty, tz])
         r2 = np.sum(np.abs(self.rcoeff)**2, axis=0)
@@ -115,7 +123,15 @@ class Layers(list):
         self.Rtot = np.sum(self.Ref)
         self.Ttot = np.sum(self.Trm)
 
-        self.is_conserve = self._power_conserve()
+    def get_force(self):
+        sinx_rf = np.real(self.K.Kx.diag/self.ref_layer.nr).reshape(self.params.Nmx, self.params.Nmy)/self.src.k0
+        siny_rf = np.real(self.K.Ky.diag/self.ref_layer.nr).reshape(self.params.Nmx, self.params.Nmy)/self.src.k0
+        sinx_tm = np.real(self.K.Kx.diag/self.trm_layer.nr).reshape(self.params.Nmx, self.params.Nmy)/self.src.k0
+        siny_tm = np.real(self.K.Ky.diag/self.trm_layer.nr).reshape(self.params.Nmx, self.params.Nmy)/self.src.k0
+        Fx = np.sum(self.Ref*sinx_rf + self.Trm*sinx_tm)
+        Fy = np.sum(self.Ref*siny_rf + self.Trm*siny_tm)
+        Fz = 2 * self.Rtot
+        return np.array([Fx, Fy, Fz])
 
     def _power_conserve(self):
         return np.isclose(self.Rtot + self.Ttot, 1)
@@ -130,8 +146,9 @@ class Layers(list):
         self._init(self.params, self.src, self.geom)
         self.solve()
 
-    def converge_test(self, Max, step=2, comp='xy', acc=1e-6):
-        self.solve()
+    def converge_test(self, Max, step=2, comp='xy', atol=1e-4):
+        if not hasattr(self, 'Rtot'):
+            self.solve()
         R = [self.Rtot]
         T = [self.Ttot]
         Mx = self.params.Nmx
@@ -140,17 +157,17 @@ class Layers(list):
         Ny = (Max - My) / step 
         N = max(Nx, 1) if 'x' in comp else 1
         N = max(N, Ny) if 'y' in comp else N
-        is_converge=False
+        if not hasattr(self, 'is_converge'): self.is_converge=False
         for n in range(int(N)):
             Mx = Mx + step if 'x' in comp else Mx
             My = My + step if 'y' in comp else My
             print(Mx, My)
             self.change_nmodes(Mx, My)
-            if np.isclose(self.Rtot, R[-1], atol=acc) and np.isclose(self.Ttot, T[-1], atol=acc):
+            if np.isclose(self.Rtot, R[-1], atol=atol) and np.isclose(self.Ttot, T[-1], atol=atol):
                 print(f"Convergence is reached at mode ({Mx},{My}), Reflectance {np.real(self.Rtot)}, Transmittance {np.real(self.Ttot)}")
-                is_converge = True
+                self.is_converge = True
             else:
-                is_converge = False
+                self.is_converge = False
             R.append(self.Rtot)
             T.append(self.Ttot)
         return R, T
