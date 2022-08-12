@@ -22,7 +22,7 @@ class Layer:
         self.er_fft = None
         self.ur_fft = None
 
-    @log("Initialising Layer")
+    @log("Solving Layer")
     def init(self, params:RCWAParams, wvm:WaveVectorMatrix):
         if self.is_homo:
             self.W, self.Lam, self.V = wvm.homo_decompose(self.er, self.ur)
@@ -46,6 +46,15 @@ class Layer:
             conv = component * spa.identity(params.Nmodes, dtype=params.dtype, format='csc')
         return buffer, conv
 
+    @log("Calculating Layer S-Matrix")
+    def get_Smat(self, params, K, W0, V0, k0):
+        W, Lam, V = self.init(params, K)
+        if self.is_homo:
+            Smat = get_homo_Smatrix(params.Nmodes, Lam, V, V0, k0, self.h)
+        else:
+            Smat = get_Smatrix(W, Lam, V, W0, V0, k0, self.h)
+        return Smat
+
 
 
 
@@ -56,7 +65,7 @@ class Layers(list):
         self.geom = geom
         self._init(params, src, geom)
 
-    @log("Initialising the layers")
+    @log("Initialising layers simulation")
     def _init(self, params, src, geom):
         self.K = WaveVectorMatrix(src, geom, params)
         self.e_src = src.e_src
@@ -88,11 +97,7 @@ class Layers(list):
         for layer in self.layers:
             print(f"Solving for layer {n}...")
             n += 1
-            W, Lam, V = layer.init(self.params, self.K)
-            if layer.is_homo:
-                Smat = get_homo_Smatrix(Nmodes, Lam, V, V0, k0, layer.h)
-            else:
-                Smat = get_Smatrix(W, Lam, V, W0, V0, k0, layer.h)
+            Smat = layer.get_Smat(self.params, self.K, W0, V0, k0)
             Smats.append(Smat)
         Smats.append(self.trm_Smat)
         self.Smat = get_total_Smat(*Smats)

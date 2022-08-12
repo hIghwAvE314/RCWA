@@ -62,8 +62,13 @@ def log(msg='', clean=True):
             res = func(*args, **kwargs)
             time2 = process_time()
             time = time2 - time1
-            if msg : print(f"Time usage of {msg}: {time*1000} ms")
             if clean: torch.cuda.empty_cache()
+            if msg : print(f"Time usage of {msg}: {time*1000} ms, cuda memory usage {torch.cuda.memory_allocated()/1024**2}MB ({cuda_mem()*100:.4f}%)")
             return res
         return wrapper
     return inner
+
+def cuda_mem():
+    mem = torch.cuda.memory_allocated()
+    total = torch.cuda.get_device_properties('cuda').total_memory
+    return mem/total

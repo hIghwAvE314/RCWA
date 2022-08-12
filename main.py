@@ -1,12 +1,14 @@
 from Params import *
 from layers import *
+import tracemalloc
 
+
+tracemalloc.start()
 
 """ Set up RCWA parameters """
 params = RCWAParams()
 params.dx, params.dy = 1e-3, 1e-3
-params.Nmx, params.Nmy = 21, 21
-params.acc=0
+params.Nmx, params.Nmy = 41, 41
 params.init()
 
 
@@ -76,6 +78,8 @@ geom.init(params)
 
 """Set up and run simulation"""
 sim = Layers(params, source, geom)
+cpu, cpu_peak = tracemalloc.get_traced_memory()
+print(f"cpu mem usage of simulation initialization: {cpu/1024**2}MB with peak {cpu_peak/1024**2}MB")
 sim.solve()
 # R, T = sim.converge_test(161, step=8, comp='x', acc=1e-6)
 # plt.plot(R)
@@ -94,6 +98,14 @@ sim.solve()
 # plt.stem(sim.params.mx, np.real(sim.Trm[:, sim.params.My]), markerfmt='x', label='trm')
 # plt.legend()
 # plt.show()
+F = sim.get_force('mode_data')
+
+max_mem = torch.cuda.max_memory_allocated()
+total_mem = torch.cuda.get_device_properties('cuda').total_memory
+cpu, cpu_peak = tracemalloc.get_traced_memory()
+tracemalloc.stop()
+print(f"\nMaximum cuda memory usage: {max_mem/1024**2}MB ({max_mem/total_mem * 100 :.4f}%)")
+print(f"cpu mem usage of total simulation: {cpu/1024**2}MB with peak {cpu_peak/1024**2}MB")
 
 print("\nReflectance:")
 for n, m in enumerate(sim.params.mx):
@@ -104,6 +116,8 @@ for n, m in enumerate(sim.params.mx):
     t = np.real(sim.Trm[n, sim.params.My])
     if not np.isclose(t, 0): print(f"Transmittance: {m}, {t}") 
 
-print("Total Reflectance: ",sim.Rtot)
+print("\nTotal Reflectance: ",sim.Rtot)
 print("Total Transmittance: ",sim.Ttot)
-print(sim.Rtot + sim.Ttot)
+print(f"Extinction: {1 - (sim.Rtot + sim.Ttot) :.4f}")
+
+print(f"\nForce coefficient: {F}")

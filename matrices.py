@@ -110,6 +110,7 @@ def expm(A:spa.spmatrix) -> spa.spmatrix:
         return mat
     raise TypeError("Matrix exponential for a non diagonal sparse matrix is not supported!")
 
+@log("Eigen core")
 def eig(A:torch.Tensor, pure_torch=False):
     if is_sparse(A):
         raise TypeError("Sparse matrix full eig is not supported!")
@@ -148,7 +149,7 @@ def block(blocks):
     row1 = torch.cat([totorch(A11,device='cpu'), totorch(A12,device='cpu')], 1)
     row2 = torch.cat([totorch(A21,device='cpu'), totorch(A22,device='cpu')], 1)
     bmat = torch.cat([row1, row2], 0)
-    return bmat
+    return bmat.cuda()
 
 
 class SMatrix:
@@ -268,29 +269,39 @@ class WaveVectorMatrix:
             lu_er = torch.linalg.lu_factor(er)
             erKx = torch.lu_solve(Kx_cuda, *lu_er)
             erKy = torch.lu_solve(Ky_cuda, *lu_er)
-            Q = [[Kx_cuda@erKy, ur_cuda - Kx_cuda@erKx], [Ky_cuda@erKy - ur_cuda, -Ky_cuda@erKx]]
+            P = [[Kx_cuda@erKy, ur_cuda - Kx_cuda@erKx], [Ky_cuda@erKy - ur_cuda, -Ky_cuda@erKx]]
         else:
             erKy = div(er, Kx)
             erKx = div(er, Ky)
             if isinstance(ur, torch.Tensor):
-                Q = [[Kx@erKy, sub(ur, Kx@erKx)], [sub(Ky@erKy, ur), -Ky@erKx]]
+                P = [[Kx@erKy, sub(ur, Kx@erKx)], [sub(Ky@erKy, ur), -Ky@erKx]]
             else:
-                Q = [[Kx@erKy, ur - Kx@erKx], [Ky@erKy - ur, -Ky@erKx]]
-        return block(Q)
+                P = [[Kx@erKy, ur - Kx@erKx], [Ky@erKy - ur, -Ky@erKx]]
+        return block(P)
 
     @log("Eigendecomposition")
     def general_decompose(self, er:Union[Number, torch.Tensor], ur:Union[Number, torch.Tensor]) -> spa.spmatrix:
         """W and V are dense matrix, Lam is sparse diagonal matrix"""
-        P = self._general_Pmatrix(er, ur)
-        Q = self._general_Qmatrix(er, ur)
+        omg2, Q = self._prepare_eig(er, ur)
+        print(f"Mem usage of Q: {Q.element_size()*Q.nelement()/1024**2}MB, mem_allocated:{torch.cuda.memory_allocated()/1024**2}MB")
         """ This line below is very expensive """
-        lam2, W = eig(matmul(P, Q))  # P,Q here must be dense matrix as it is not possible to calculate full eigenvectors of a sparse matrix?
+        lam2, W = eig(omg2)  # P,Q here must be dense matrix as it is not possible to calculate full eigenvectors of a sparse matrix?
+        print(f"Mem usage of W: {W.element_size()*W.nelement()/1024**2}MB, mem_allocated:{torch.cuda.memory_allocated()/1024**2}MB")
         lam = np.sqrt(lam2)
         Lam = spa.diags(lam, format='csc', dtype=self.dtype)
         setattr(Lam, 'diag', lam)
         Lam_inv = inv(Lam)
         V = matmul(matmul(Q, W), Lam_inv)
+        print(f"Mem usage of V: {V.element_size()*V.nelement()/1024**2}MB, mem_allocated:{torch.cuda.memory_allocated()/1024**2}MB")
         return W, Lam, V
+
+    @log("Preparing omg2 matrix")
+    def _prepare_eig(self, er, ur):
+        P = self._general_Pmatrix(er, ur)
+        Q = self._general_Qmatrix(er, ur)
+        omg2 = totorch(matmul(P, Q), device='cpu')
+        return omg2, Q
+
 
 
 
@@ -371,6 +382,8 @@ def get_Smatrix(W:MAT, Lam:spa.csc_matrix, V:MAT, W0:spa.spmatrix, V0:spa.spmatr
     Vterm = div(V, V0)
     A = add(Wterm, Vterm)  # MAT
     B = sub(Wterm, Vterm)  # MAT
+    Wterm, Vterm = None, None
+    torch.cuda.empty_cache()
     X = totorch(expm( -k0*thick * Lam))  # sparse
     BA_inv = rdiv(A, B)  # MAT
     D_lu = torch.linalg.lu_factor(A - X@BA_inv@X@B)
