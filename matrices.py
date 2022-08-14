@@ -60,21 +60,25 @@ def matmul(A:MAT, B:MAT) -> MAT:
         return A @ B
     return totorch(A) @ totorch(B)
 
+@log()
 def add(A:MAT, B:MAT) -> MAT:
     if is_sparse(A) and is_sparse(B):
         return A + B
     return totorch(A) + totorch(B)
 
+@log()
 def sub(A:MAT, B:MAT) -> MAT:
     if is_sparse(A) and is_sparse(B):
         return A - B
     return totorch(A) - totorch(B)
 
+@log()
 def mul(A:MAT, B:MAT) -> MAT:
     if is_sparse(A) and is_sparse(B):
         return A * B
     return totorch(A) * totorch(B)
 
+@log()
 def inv(A:MAT, is_store=False) -> MAT:
     if hasattr(A, 'invmat'):
         return getattr(A, 'invmat')
@@ -88,7 +92,7 @@ def inv(A:MAT, is_store=False) -> MAT:
                 mat = spa.diags(diag_inv, format='csc', dtype=diag.dtype)
                 setattr(mat, 'diag', diag_inv)
         else:
-            mat = torch.linalg.inv(A)
+            mat = torch.linalg.inv(totorch(A))
     except RuntimeError as E:
         print(E)
         mat = pinv(A)
@@ -96,6 +100,7 @@ def inv(A:MAT, is_store=False) -> MAT:
         setattr(A, 'invmat', mat)
     return mat
 
+@log()
 def pinv(A:MAT) -> torch.Tensor:
     """This method is quite slow, don't use unless neccessary"""
     return torch.linalg.pinv(totorch(A))
@@ -124,6 +129,7 @@ def eig(A:torch.Tensor, pure_torch=False):
         vecs = numpy2torch(npvecs)
     return vals, vecs
 
+@log()
 def div(A:MAT, B:MAT) -> MAT:
     """ Calculate A_inverse @ B """
     if is_sparse(A):
@@ -134,7 +140,7 @@ def div(A:MAT, B:MAT) -> MAT:
         if is_sparse(B):
             B_lu = B.tocsc()
         return spLA.spsolve(A_lu, B_lu)
-    return torch.linalg.solve(A, totorch(B))
+    return torch.linalg.solve(totorch(A), totorch(B))
 
 def rdiv(A:MAT, B:MAT) -> MAT:
     """Calculate B @ A_inverse by solve(A.T, B.T).T"""
@@ -387,8 +393,10 @@ def get_Smatrix(W:MAT, Lam:spa.csc_matrix, V:MAT, W0:spa.spmatrix, V0:spa.spmatr
     X = totorch(expm( -k0*thick * Lam))  # sparse
     BA_inv = rdiv(A, B)  # MAT
     D_lu = torch.linalg.lu_factor(A - X@BA_inv@X@B)
-    S11 = torch.lu_solve((X@BA_inv@X@A - B), *D_lu)  # MAT
-    S12 = torch.lu_solve(X@(A - BA_inv@B), *D_lu)  # MAT
+    S11 = (torch.lu_solve((X@BA_inv@X@A - B), *D_lu)).cpu()  # MAT
+    S12 = (torch.lu_solve(X@(A - BA_inv@B), *D_lu)).cpu()  # MAT
+    # S11 = torch.solve(A - X@BA_inv@X@B, X@BA_inv@X@A - B)
+    # S11 = torch.solve(A - X@BA_inv@X@B, X@(A - BA_inv@B))
     S21 = S12  # MAT
     S22 = S11  # MAT
     return SMatrix(S11, S12, S21, S22)

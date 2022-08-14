@@ -35,7 +35,7 @@ class Layer:
             W, self.Lam, V = wvm.general_decompose(er, ur)
             self.W = totorch(W, device='cpu')
             self.V = totorch(V, device='cpu')
-        return W, self.Lam, V
+        return self.W, self.Lam, self.V
 
     def _init_convol_mat(self, component, params, buffer=None):
         if isinstance(component, np.ndarray):
@@ -104,6 +104,7 @@ class Layers(list):
         print("Solving for the fields and diffraction efficiency...")
         self.get_DE()
         self.is_conserve = self._power_conserve()
+        self.get_force()
 
     def get_DE(self):
         # self.e_ref = self.ref_layer.W @ self.Smat.S11 @ inv(self.ref_layer.W) @ self.e_src
@@ -136,6 +137,7 @@ class Layers(list):
         Fx = np.sum(self.Ref*sinx_rf + self.Trm*sinx_tm)
         Fy = np.sum(self.Ref*siny_rf + self.Trm*siny_tm)
         Fz = 2 * self.Rtot
+        self.F = np.array([Fx, Fy, Fz])
         if file:
             np.savez(
                 file,
@@ -143,9 +145,8 @@ class Layers(list):
                 Ky = np.real(self.K.Ky.diag).reshape(self.params.Nmx, self.params.Nmy),
                 Ref = self.Ref,
                 Trm = self.Trm,
-                F = np.array([Fx, Fy, Fz]),
+                F = self.F,
             )
-        return np.array([Fx, Fy, Fz])
 
     def _power_conserve(self):
         return np.isclose(self.Rtot + self.Ttot, 1)
@@ -165,6 +166,7 @@ class Layers(list):
             self.solve()
         R = [self.Rtot]
         T = [self.Ttot]
+        F = [self.F]
         Mx = self.params.Nmx
         My = self.params.Nmy
         Nx = (Max - Mx) / step 
@@ -177,14 +179,15 @@ class Layers(list):
             My = My + step if 'y' in comp else My
             print(Mx, My)
             self.change_nmodes(Mx, My)
-            if np.isclose(self.Rtot, R[-1], atol=atol) and np.isclose(self.Ttot, T[-1], atol=atol):
-                print(f"Convergence is reached at mode ({Mx},{My}), Reflectance {np.real(self.Rtot)}, Transmittance {np.real(self.Ttot)}")
+            if np.isclose(self.F[0], F[-1][0], atol=atol) or np.isclose(self.Ttot, T[-1], atol=atol):
+                print(f"Convergence is reached at mode ({Mx},{My}), Reflectance {np.real(self.Rtot)}, Transmittance {np.real(self.Ttot)}, Force {self.F}")
                 self.is_converge = True
             else:
                 self.is_converge = False
             R.append(self.Rtot)
             T.append(self.Ttot)
-        return R, T
+            F.append(self.F)
+        return R, T, F
 
 
 
