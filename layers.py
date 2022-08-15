@@ -130,19 +130,29 @@ class Layers(list):
         self.Ttot = np.sum(self.Trm)
 
     def get_force(self, file=''):
-        sinx_rf = np.real(self.K.Kx.diag/self.ref_layer.nr).reshape(self.params.Nmx, self.params.Nmy)/self.src.k0
-        siny_rf = np.real(self.K.Ky.diag/self.ref_layer.nr).reshape(self.params.Nmx, self.params.Nmy)/self.src.k0
-        sinx_tm = np.real(self.K.Kx.diag/self.trm_layer.nr).reshape(self.params.Nmx, self.params.Nmy)/self.src.k0
-        siny_tm = np.real(self.K.Ky.diag/self.trm_layer.nr).reshape(self.params.Nmx, self.params.Nmy)/self.src.k0
-        Fx = np.sum(self.Ref*sinx_rf + self.Trm*sinx_tm)
-        Fy = np.sum(self.Ref*siny_rf + self.Trm*siny_tm)
-        Fz = 2 * self.Rtot
+        Nmx, Nmy = self.params.Nmx, self.params.Nmy
+        Kx = np.real(self.K.Kx.diag.reshape(Nmx, Nmy))
+        Ky = np.real(self.K.Ky.diag.reshape(Nmx, Nmy))
+        Kz_rf = self.K.Kz_rf.diag.reshape(Nmx, Nmy)
+        Kz_tm = self.K.Kz_tm.diag.reshape(Nmx, Nmy)
+        mask_rf = np.nonzero(np.real(Kz_rf))
+        mask_tm = np.nonzero(np.real(Kz_tm))
+        crf = np.sqrt(1 - np.real(Kz_rf[mask_rf]/self.ref_layer.nr)**2)
+        ctm = np.sqrt(1 - np.real(Kz_tm[mask_tm]/self.trm_layer.nr)**2)
+        phi_rf = np.arctan2(Ky[mask_rf], Kx[mask_rf])
+        phi_tm = np.arctan2(Ky[mask_tm], Kx[mask_tm])
+        Fx = np.sum(self.Ref[mask_rf]*crf*np.cos(phi_rf) + self.Trm[mask_tm]*ctm*np.cos(phi_tm))
+        Fy = np.sum(self.Ref[mask_rf]*crf*np.sin(phi_rf) + self.Trm[mask_tm]*ctm*np.sin(phi_tm))
+        Fz = 1 - np.sum(-self.Ref[mask_rf]*np.real(Kz_rf[mask_rf]/self.ref_layer.nr) + self.Trm[mask_tm]*np.real(Kz_tm[mask_tm]/self.trm_layer.nr))
         self.F = np.array([Fx, Fy, Fz])
         if file:
             np.savez(
                 file,
                 Kx = np.real(self.K.Kx.diag).reshape(self.params.Nmx, self.params.Nmy),
                 Ky = np.real(self.K.Ky.diag).reshape(self.params.Nmx, self.params.Nmy),
+                Kz_rf = self.K.Kz_rf.diag.reshape(Nmx, Nmy),
+                Kz_tm = self.K.Kz_tm.diag.reshape(Nmx, Nmy),
+                Kz_0 = self.K.Kz_0.diag.reshape(Nmx, Nmy),
                 Ref = self.Ref,
                 Trm = self.Trm,
                 F = self.F,

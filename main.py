@@ -8,7 +8,7 @@ tracemalloc.start()
 """ Set up RCWA parameters """
 params = RCWAParams()
 params.dx, params.dy = 1e-3, 1e-3
-params.Nmx, params.Nmy = 71, 71
+params.Nmx, params.Nmy = 41, 41
 params.dtype = np.complex64
 params.init()
 
