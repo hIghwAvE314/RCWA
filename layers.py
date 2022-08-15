@@ -30,8 +30,8 @@ class Layer:
         else:
             self.er_fft, er = self._init_convol_mat(self.er, params, buffer=self.er_fft)
             self.ur_fft, ur = self._init_convol_mat(self.ur, params, buffer=self.ur_fft)
-            er = numpy2torch(er) if isinstance(er, np.ndarray) else er
-            ur = numpy2torch(ur) if isinstance(ur, np.ndarray) else ur
+            er = numpy2torch(er.astype(params.dtype)) if isinstance(er, np.ndarray) else er
+            ur = numpy2torch(ur.astype(params.dtype)) if isinstance(ur, np.ndarray) else ur
             W, self.Lam, V = wvm.general_decompose(er, ur)
             self.W = totorch(W, device='cpu')
             self.V = totorch(V, device='cpu')
@@ -147,6 +147,7 @@ class Layers(list):
                 Trm = self.Trm,
                 F = self.F,
             )
+        return self.F
 
     def _power_conserve(self):
         return np.isclose(self.Rtot + self.Ttot, 1)

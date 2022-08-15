@@ -9,6 +9,7 @@ tracemalloc.start()
 params = RCWAParams()
 params.dx, params.dy = 1e-3, 1e-3
 params.Nmx, params.Nmy = 21, 21
+params.dtype = np.complex64
 params.init()
 
 
@@ -60,24 +61,59 @@ print(f"cpu mem usage of simulation initialization: {cpu/1024**2}MB with peak {c
 sim.solve()
 
 R, T, F = sim.converge_test(61, step=4, comp='xy', atol=1e-4)
-# plt.plot(R)
-# plt.plot(T)
-# plt.show()
-
-# kx = sim.K.Kx.diagonal().reshape(sim.params.Nmx, sim.params.Nmy)
-# ky = sim.K.Ky.diagonal().reshape(sim.params.Nmx, sim.params.Nmy)
-# real_mode_mask = np.isclose(np.imag(kx),0) + np.isclose(np.imag(ky),0)
-# plt.imshow(np.real(sim.Ref[real_mode_mask]))
-# plt.show()
-# plt.imshow(np.real(sim.Trm[real_mode_mask]))
-# plt.show()
-
-# plt.stem(sim.params.mx, np.real(sim.Ref[:, sim.params.My]), markerfmt='x', label='ref')
-# plt.stem(sim.params.mx, np.real(sim.Trm[:, sim.params.My]), markerfmt='x', label='trm')
-# plt.legend()
-# plt.show()
 np.savez(
-    "converge_data",
+    "converge_data_single",
+    R = np.array(R),
+    T = np.array(T),
+    F = np.array(F),
+)
+
+max_mem = torch.cuda.max_memory_allocated()
+total_mem = torch.cuda.get_device_properties('cuda').total_memory
+cpu, cpu_peak = tracemalloc.get_traced_memory()
+print(f"\nMaximum cuda memory usage: {max_mem/1024**2}MB ({max_mem/total_mem * 100 :.4f}%)")
+print(f"cpu mem usage of total simulation: {cpu/1024**2}MB with peak {cpu_peak/1024**2}MB")
+
+print("\nReflectance:")
+for n, m in enumerate(sim.params.mx):
+    r = np.real(sim.Ref[n, sim.params.My])
+    if not np.isclose(r, 0): print(f"mode {m}: {r}")
+print("\nTransmittance:")
+for n, m in enumerate(sim.params.mx):
+    t = np.real(sim.Trm[n, sim.params.My])
+    if not np.isclose(t, 0): print(f"Transmittance: {m}, {t}") 
+
+print("\nTotal Reflectance: ",sim.Rtot)
+print("Total Transmittance: ",sim.Ttot)
+print(f"Extinction: {1 - (sim.Rtot + sim.Ttot) :.4f}")
+
+print(f"\nForce coefficient: {sim.F}")
+
+print("\n\n\nStarting simulation for double precesion")
+geom = Geom()
+geom.init(params)
+
+
+"""Set up and run simulation"""
+params = RCWAParams()
+params.dx, params.dy = 1e-3, 1e-3
+params.Nmx, params.Nmy = 21, 21
+params.dtype = np.complex64
+params.init()
+
+
+""" Set up source parameters """
+source = Source()
+source.wl = 1.064
+source.init(params)
+sim = Layers(params, source, geom)
+cpu, cpu_peak = tracemalloc.get_traced_memory()
+print(f"cpu mem usage of simulation initialization: {cpu/1024**2}MB with peak {cpu_peak/1024**2}MB")
+sim.solve()
+
+R, T, F = sim.converge_test(61, step=4, comp='xy', atol=1e-4)
+np.savez(
+    "converge_data_double",
     R = np.array(R),
     T = np.array(T),
     F = np.array(F),
@@ -103,4 +139,4 @@ print("\nTotal Reflectance: ",sim.Rtot)
 print("Total Transmittance: ",sim.Ttot)
 print(f"Extinction: {1 - (sim.Rtot + sim.Ttot) :.4f}")
 
-print(f"\nForce coefficient: {F}")
+print(f"\nForce coefficient: {sim.F}")

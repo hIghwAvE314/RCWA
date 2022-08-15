@@ -1,6 +1,6 @@
 import numpy as np
 from scipy import linalg as LA
-from time import process_time
+import time
 import torch
 
 
@@ -58,12 +58,12 @@ class Structure:
 def log(msg='', clean=True):
     def inner(func):
         def wrapper(*args, **kwargs):
-            time1 = process_time()
+            time1 = time.time()
             res = func(*args, **kwargs)
-            time2 = process_time()
-            time = time2 - time1
+            time2 = time.time()
+            dtime = time2 - time1
             if clean: torch.cuda.empty_cache()
-            if msg : print(f"Time usage of {msg}: {time*1000} ms, cuda memory usage {torch.cuda.memory_allocated()/1024**2}MB ({cuda_mem()*100:.4f}%)")
+            if msg : print(f"Time usage of {msg}: {dtime*1000} ms, cuda memory usage {torch.cuda.memory_allocated()/1024**2}MB ({cuda_mem()*100:.4f}%)")
             return res
         return wrapper
     return inner
