@@ -1,22 +1,5 @@
 from Params import *
-from layers import *
-import tracemalloc
-
-
-tracemalloc.start()
-
-""" Set up RCWA parameters """
-params = RCWAParams()
-params.dx, params.dy = 1e-3, 1e-3
-params.Nmx, params.Nmy = 21, 21
-params.dtype = np.complex64
-params.init()
-
-
-""" Set up source parameters """
-source = Source()
-source.wl = 1.064
-source.init(params)
+from rcwa import *
 
 
 """ Set up structure parameters """
@@ -50,93 +33,32 @@ class Geom(Structure):
         self.errf, self.urrf = self.nrf**2, 1.+0j
         self.ertm, self.urtm = self.ntm**2, 1.+0j
 
-geom = Geom()
-geom.init(params)
 
 
-"""Set up and run simulation"""
-sim = Layers(params, source, geom)
-cpu, cpu_peak = tracemalloc.get_traced_memory()
-print(f"cpu mem usage of simulation initialization: {cpu/1024**2}MB with peak {cpu_peak/1024**2}MB")
-sim.solve()
+def converge(nmode):
+    params = RCWAParams()
+    params.dx, params.dy = 1e-3, 1e-3
+    params.Nmx, params.Nmy = 41, nmode
+    params.init()
 
-R, T, F = sim.converge_test(61, step=4, comp='xy', atol=1e-4)
-np.savez(
-    "converge_data_single",
-    R = np.array(R),
-    T = np.array(T),
-    F = np.array(F),
-)
+    source = Source()
+    source.wl = 1.064
+    source.init(params)
 
-max_mem = torch.cuda.max_memory_allocated()
-total_mem = torch.cuda.get_device_properties('cuda').total_memory
-cpu, cpu_peak = tracemalloc.get_traced_memory()
-print(f"\nMaximum cuda memory usage: {max_mem/1024**2}MB ({max_mem/total_mem * 100 :.4f}%)")
-print(f"cpu mem usage of total simulation: {cpu/1024**2}MB with peak {cpu_peak/1024**2}MB")
+    geom = Geom()
+    geom.init(params)
 
-print("\nReflectance:")
-for n, m in enumerate(sim.params.mx):
-    r = np.real(sim.Ref[n, sim.params.My])
-    if not np.isclose(r, 0): print(f"mode {m}: {r}")
-print("\nTransmittance:")
-for n, m in enumerate(sim.params.mx):
-    t = np.real(sim.Trm[n, sim.params.My])
-    if not np.isclose(t, 0): print(f"Transmittance: {m}, {t}") 
+    sim = Layers(params, source, geom)
+    sim.solve()
+    return sim
 
-print("\nTotal Reflectance: ",sim.Rtot)
-print("Total Transmittance: ",sim.Ttot)
-print(f"Extinction: {1 - (sim.Rtot + sim.Ttot) :.4f}")
+with open("converge_test02.csv", 'a') as f:
+    # f.write("nmodes,R,T,Fx,Fy,Fz,time\n")
+    for nmode in range(3,11,2):
+        print(f"Computing mode {nmode}")
+        start_time = time.time()
+        sim = converge(nmode)
+        end_time = time.time()
+        time_usage = (end_time - start_time) * 1000  # ms
+        f.write(f"{nmode}, {sim.Rtot}, {sim.Ttot}, {sim.F[0]}, {sim.F[1]}, {sim.F[2]}, {time_usage}\n")
 
-print(f"\nForce coefficient: {sim.F}")
-
-print("\n\n\nStarting simulation for double precesion")
-geom = Geom()
-geom.init(params)
-
-
-"""Set up and run simulation"""
-params = RCWAParams()
-params.dx, params.dy = 1e-3, 1e-3
-params.Nmx, params.Nmy = 21, 21
-params.dtype = np.complex64
-params.init()
-
-
-""" Set up source parameters """
-source = Source()
-source.wl = 1.064
-source.init(params)
-sim = Layers(params, source, geom)
-cpu, cpu_peak = tracemalloc.get_traced_memory()
-print(f"cpu mem usage of simulation initialization: {cpu/1024**2}MB with peak {cpu_peak/1024**2}MB")
-sim.solve()
-
-R, T, F = sim.converge_test(61, step=4, comp='xy', atol=1e-4)
-np.savez(
-    "converge_data_double",
-    R = np.array(R),
-    T = np.array(T),
-    F = np.array(F),
-)
-
-max_mem = torch.cuda.max_memory_allocated()
-total_mem = torch.cuda.get_device_properties('cuda').total_memory
-cpu, cpu_peak = tracemalloc.get_traced_memory()
-tracemalloc.stop()
-print(f"\nMaximum cuda memory usage: {max_mem/1024**2}MB ({max_mem/total_mem * 100 :.4f}%)")
-print(f"cpu mem usage of total simulation: {cpu/1024**2}MB with peak {cpu_peak/1024**2}MB")
-
-print("\nReflectance:")
-for n, m in enumerate(sim.params.mx):
-    r = np.real(sim.Ref[n, sim.params.My])
-    if not np.isclose(r, 0): print(f"mode {m}: {r}")
-print("\nTransmittance:")
-for n, m in enumerate(sim.params.mx):
-    t = np.real(sim.Trm[n, sim.params.My])
-    if not np.isclose(t, 0): print(f"Transmittance: {m}, {t}") 
-
-print("\nTotal Reflectance: ",sim.Rtot)
-print("Total Transmittance: ",sim.Ttot)
-print(f"Extinction: {1 - (sim.Rtot + sim.Ttot) :.4f}")
-
-print(f"\nForce coefficient: {sim.F}")
