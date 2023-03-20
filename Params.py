@@ -1,14 +1,12 @@
 import numpy as np
 from scipy import linalg as LA
 import time
-import torch
 
 
 class RCWAParams:
     dx, dy = 1e-3, 1e-3  # resolution in real space (um)
     Nmx, Nmy = 7, 7  # number of harmonics in each direction
-    # acc = 16
-    dtype = complex
+    dtype = np.complex128
 
     is_init = False
 
@@ -55,20 +53,14 @@ class Structure:
     pass
 
 
-def log(msg='', clean=True):
+def log(msg=''):
     def inner(func):
         def wrapper(*args, **kwargs):
             time1 = time.time()
             res = func(*args, **kwargs)
             time2 = time.time()
             dtime = time2 - time1
-            if clean: torch.cuda.empty_cache()
-            if msg : print(f"Time usage of {msg}: {dtime*1000} ms, cuda memory usage {torch.cuda.memory_allocated()/1024**2}MB ({cuda_mem()*100:.4f}%)")
+            if msg : print(f"Time usage of {msg}: {dtime*1000} ms")
             return res
         return wrapper
     return inner
-
-def cuda_mem():
-    mem = torch.cuda.memory_allocated()
-    total = torch.cuda.get_device_properties('cuda').total_memory
-    return mem/total
