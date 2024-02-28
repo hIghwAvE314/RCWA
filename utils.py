@@ -271,7 +271,7 @@ def rdiv(A: Union[MAT, np.ndarray], B: Union[MAT, np.ndarray]) -> Union[MAT, np.
             return np.linalg.solve(A.T, B.view().T).T
 
 
-@log(msg="calculating FFT")
+# @log(msg="calculating FFT")
 def fft2(arr: np.ndarray) -> np.ndarray:
     Nxy = np.product(arr.shape)  # total number of points in real space
     Arr = np.fft.fft2(arr)/Nxy  # Fourier transform of arr and normlisation

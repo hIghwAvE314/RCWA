@@ -39,7 +39,7 @@ class WaveVectors:
         V = Q @ Lam.inv()
         return W, Lam, V
 
-    @log(msg="eigendecomposition")
+    # @log(msg="eigendecomposition")
     def general_decompose(self, er:Union[np.ndarray, complex], ur:Union[np.ndarray, complex])->Tuple[MAT, MAT, MAT]:
         P = self._get_PQ(er, ur)
         Q = self._get_PQ(ur, er)
@@ -118,7 +118,7 @@ class Layer:
             conv = component
         return buffer, conv
 
-    @log(msg="constructing S-matrix")
+    # @log(msg="constructing S-matrix")
     def get_Smat(self, params, K, W0, V0, k0):
         W, Lam, V = self.init(params, K)
         if self.is_homo:
@@ -209,8 +209,8 @@ class Layers(list):
         ctm = np.sqrt(1 - np.real(Kz_tm[mask_tm]/self.trm_layer.nr)**2)
         phi_rf = np.arctan2(Ky[mask_rf], Kx[mask_rf])
         phi_tm = np.arctan2(Ky[mask_tm], Kx[mask_tm])
-        Fx = np.sum(self.Ref[mask_rf]*crf*np.cos(phi_rf) + self.Trm[mask_tm]*ctm*np.cos(phi_tm))
-        Fy = np.sum(self.Ref[mask_rf]*crf*np.sin(phi_rf) + self.Trm[mask_tm]*ctm*np.sin(phi_tm))
+        Fx = -np.sum(self.Ref[mask_rf]*crf*np.cos(phi_rf) + self.Trm[mask_tm]*ctm*np.cos(phi_tm))
+        Fy = -np.sum(self.Ref[mask_rf]*crf*np.sin(phi_rf) + self.Trm[mask_tm]*ctm*np.sin(phi_tm))
         Fz = 1 - np.sum(-self.Ref[mask_rf]*np.real(Kz_rf[mask_rf]/self.ref_layer.nr) + self.Trm[mask_tm]*np.real(Kz_tm[mask_tm]/self.trm_layer.nr))
         self.F = np.array([Fx, Fy, Fz])
         if file:
