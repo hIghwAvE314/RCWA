@@ -2,7 +2,7 @@ import numpy as np
 from typing import Union
 from scipy import linalg as LA
 
-from Params import *
+from .Params import *
 
 MAT = Union["BlockMatrix", "DiagMatrix", "DiagBlockMatrix"]
 
@@ -357,7 +357,7 @@ def get_trmSmatrix(Nmodes: int, V: DiagBlockMatrix, V0: DiagBlockMatrix) -> SMat
 
 
 def get_total_Smat(*Smats: SMatrix) -> SMatrix:
-    print("Computing total S-matrix")
+    # print("Computing total S-matrix")
     new_Smats = []
     last = None
     for n, Smat in enumerate(Smats):

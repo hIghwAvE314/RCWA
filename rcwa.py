@@ -1,8 +1,8 @@
 import numpy as np
 from typing import Tuple, Union
 
-from Params import *
-from utils import *
+from .Params import *
+from .utils import *
 
 
 class WaveVectors:
@@ -163,13 +163,13 @@ class Layers(list):
         k0 = self.src.k0
         Nmodes = self.params.Nmodes
         for layer in self.layers:
-            print(f"Solving for layer {n}...")
+            # print(f"Solving for layer {n}...")
             n += 1
             Smat = layer.get_Smat(self.params, self.K, W0, V0, k0)
             Smats.append(Smat)
         Smats.append(self.trm_Smat)
         self.Smat = get_total_Smat(*Smats)
-        print("Solving for the fields and diffraction efficiency...")
+        # print("Solving for the fields and diffraction efficiency...")
         self.get_DE()
         self.is_conserve = self._power_conserve()
         self.get_force()
