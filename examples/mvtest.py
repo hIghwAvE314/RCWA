@@ -1,5 +1,8 @@
-from RCWAv2 import RCWAParams, Source, Layers
-from Geoms import MetaVehicle
+import sys, os
+sys.path.append('..')
+
+from rcwa import RCWAParams, Source, Layers
+from geometries import MetaVehicle
 
 params = RCWAParams()
 params.Nmx, params.Nmy = 35, 11
@@ -13,5 +16,5 @@ geom = MetaVehicle()
 geom.init(params)
 
 sim = Layers(params, source, geom)
-# sim.solve()
-# print(sim.F)
+sim.solve()
+print(sim.F)
