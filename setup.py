@@ -5,6 +5,5 @@ setup(
     version='0.1',
     packages=[
         "rcwa",
-        "rcwa.geometries",
     ],
 )

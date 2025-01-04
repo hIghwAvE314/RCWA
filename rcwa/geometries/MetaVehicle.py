@@ -1,7 +1,7 @@
 from matplotlib.path import Path
 import numpy as np
 
-from rcwa import *
+from rcwa.rcwa import Structure, RCWAParams
 
 class MetaVehicle(Structure):
     l1, gap, l2 = 0.40, 0.05, 0.27

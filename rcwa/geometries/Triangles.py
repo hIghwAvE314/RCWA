@@ -1,7 +1,7 @@
 from matplotlib.path import Path
 import numpy as np
 
-from rcwa import *
+from rcwa.rcwa import Structure, RCWAParams
 
 
 class Triangle(Structure):
