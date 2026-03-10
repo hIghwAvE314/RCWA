@@ -6,4 +6,8 @@ setup(
     packages=[
         "rcwa",
     ],
+    install_requires=[
+        "numpy",
+        "scipy",
+    ],
 )

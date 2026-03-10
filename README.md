@@ -1,3 +1,33 @@
+# RCWA
+
+A Python implementation of **Rigorous Coupled-Wave Analysis (RCWA)** for electromagnetic simulations of periodic structures, with a focus on fast optical force calculations.
+
+## Overview
+
+RCWA is a frequency-domain method for solving Maxwell's equations in layered periodic media. This package provides:
+
+- **Arbitrary periodic geometries** — define structured layers through permittivity and permeability distributions
+- **Multi-mode expansion** — control the number of Fourier harmonics for accuracy vs. speed trade-offs
+- **Optical force simulation** — efficient computation of radiation pressure and gradient forces on periodic structures
+- **Flexible material support** — handles complex, dispersive, and anisotropic media
+
+## Requirements
+
+- `numpy`
+- `scipy`
+
+## Installation
+
+```bash
+pip install -e .
+```
+
+## Quick Start
+
+See [examples/how-to-use.md](examples/how-to-use.md) and [examples/mvtest.py](examples/mvtest.py) for usage examples.
+
+---
+
 # Citation
 If you use this software in your research or projects, please cite the following paper:
 ```bibtex
